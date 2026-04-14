@@ -800,16 +800,14 @@ body::before {
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getAnalytics } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-analytics.js";
   import {
-    getFirestore,
-    collection,
-    onSnapshot,
-    addDoc,
-    deleteDoc,
-    doc,
-    getDocs,
-    writeBatch,
-    setDoc
-  } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+    getDatabase,
+    ref,
+    onValue,
+    push,
+    remove,
+    set,
+    off
+  } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyBPpH6Zmr9ubRVnFzwPM4eg7HIRU_aJQPw",
@@ -818,36 +816,35 @@ body::before {
     storageBucket: "jomar-and-rio.firebasestorage.app",
     messagingSenderId: "570982934335",
     appId: "1:570982934335:web:4cecc54b355aa37b39958a",
-    measurementId: "G-39PBL6SWR1"
+    measurementId: "G-39PBL6SWR1",
+    databaseURL: "https://jomar-and-rio-default-rtdb.firebaseio.com"
   };
 
   const app = initializeApp(firebaseConfig);
   const analytics = getAnalytics(app);
-  const db = getFirestore(app);
+  const db = getDatabase(app);
 
-  // Expose db & Firestore helpers to global scope
+  // Expose helpers to global scope
   window._db = db;
-  window._writeBatch = () => writeBatch(db);
-  window._fsCol  = (path) => collection(db, path);
-  window._fsDoc  = (path, id) => doc(db, path, id);
-  window._fsAdd  = (path, data) => addDoc(collection(db, path), data);
-  window._fsDel  = (path, id) => deleteDoc(doc(db, path, id));
-  window._fsGetAll = (path) => getDocs(collection(db, path));
-  window._fsSet  = (path, id, data) => setDoc(doc(db, path, id), data);
+  window._rtdbRef   = (path) => ref(db, path);
+  window._rtdbAdd   = (data) => push(ref(db, "guests"), data);
+  window._rtdbDel   = (id)   => remove(ref(db, "guests/" + id));
+  window._rtdbClear = ()     => set(ref(db, "guests"), null);
 
   const dot    = document.getElementById('fb-dot');
   const status = document.getElementById('fb-status-text');
 
-  // Real-time listener for guests collection
-  const unsubscribe = onSnapshot(
-    collection(db, "guests"),
+  // Real-time listener
+  onValue(
+    ref(db, "guests"),
     (snapshot) => {
-      // Connected
       dot.className = 'fb-dot connected';
       status.textContent = 'Live · Firebase';
 
       const data = [];
-      snapshot.forEach(d => data.push({ _id: d.id, ...d.data() }));
+      snapshot.forEach(child => {
+        data.push({ _id: child.key, ...child.val() });
+      });
       window._guests = data;
       window._guestsLoaded = true;
       renderAdminList();
@@ -857,8 +854,7 @@ body::before {
     (err) => {
       dot.className = 'fb-dot error';
       status.textContent = 'Offline · Local';
-      console.error('Firestore error:', err);
-      // Fallback to localStorage
+      console.error('RTDB error:', err);
       window._guests = loadLocalGuests();
       window._guestsLoaded = true;
       renderAdminList();
@@ -1019,9 +1015,9 @@ async function addGuest() {
 
   const guestData = { name, table, companions };
   try {
-    if (window._fsAdd) {
-      await window._fsAdd("guests", guestData);
-      // onSnapshot will automatically update window._guests and re-render
+    if (window._rtdbAdd) {
+      await window._rtdbAdd(guestData);
+      // onValue will automatically update window._guests and re-render
     } else {
       window._guests.push(guestData);
       saveLocalGuests();
@@ -1039,9 +1035,9 @@ async function addGuest() {
 async function deleteGuest(i) {
   const guest = window._guests[i];
   try {
-    if (guest && guest._id && window._fsDel) {
-      await window._fsDel("guests", guest._id);
-      // onSnapshot will automatically update window._guests and re-render
+    if (guest && guest._id && window._rtdbDel) {
+      await window._rtdbDel(guest._id);
+      // onValue will automatically update window._guests and re-render
     } else {
       window._guests.splice(i, 1);
       saveLocalGuests();
@@ -1084,8 +1080,8 @@ async function importData(e) {
       const data = JSON.parse(ev.target.result);
       if (!Array.isArray(data)) throw new Error();
       const valid = data.filter(g => g.name && g.table);
-      if (window._fsAdd) {
-        for (const g of valid) await window._fsAdd("guests", { name: g.name, table: g.table, companions: g.companions || [] });
+      if (window._rtdbAdd) {
+        for (const g of valid) await window._rtdbAdd({ name: g.name, table: g.table, companions: g.companions || [] });
       } else {
         window._guests = valid;
         saveLocalGuests();
@@ -1100,12 +1096,9 @@ async function importData(e) {
 async function clearAll() {
   if (!confirm('Remove all guests? This cannot be undone.')) return;
   try {
-    if (window._db && window._fsGetAll && window._writeBatch) {
-      const snap = await window._fsGetAll("guests");
-      const batch = window._writeBatch();
-      snap.forEach(d => batch.delete(d.ref));
-      await batch.commit();
-      // onSnapshot will automatically clear window._guests and re-render
+    if (window._rtdbClear) {
+      await window._rtdbClear();
+      // onValue will automatically clear window._guests and re-render
     } else {
       window._guests = [];
       saveLocalGuests();
